@@ -1,7 +1,7 @@
-local c = require"tests.common"
+local c = require "tests.common"
 local try, gmtry, iter, allchars, dumpacc = c.try, c.gmtry, c.iter, c.allchars, c.dumpacc
 
-local strung = require"strung"
+local strung = require "strung"
 
 local bench = arg[1] == "bench"
 
@@ -12,15 +12,15 @@ gmtry(allchars, "%a+")
 
 iter(1)
 
-for _, locale in ipairs{
+for _, locale in ipairs {
     -- let this out for now, LJ character classes are not sensitive to os.setlocale()
     -- "fr_FR",
     "C"
 } do
     -- print("LOCALE: ", strung.setlocale(locale))
-    for c in ("acdlpsuwxz"):gmatch"." do
-        gmtry(allchars, "%"..c.."+")
-        gmtry(allchars, "%"..c:upper().."+")
+    for c in ("acdlpsuwxz"):gmatch "." do
+        gmtry(allchars, "%" .. c .. "+")
+        gmtry(allchars, "%" .. c:upper() .. "+")
     end
 end
 
