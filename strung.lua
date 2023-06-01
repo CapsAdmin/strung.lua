@@ -43,6 +43,7 @@ local o_setlocale = require "os".setlocale
 local s, t = require "string", require "table"
 
 local s_byte, s_find, s_gmatch, s_gsub, s_len, s_rep, s_sub = s.byte, s.find, s.gmatch, s.gsub, s.len, s.rep, s.sub
+local B = s.byte
 
 local t_concat, t_insert = t.concat, t.insert
 
@@ -86,27 +87,21 @@ end
 
 -- This allows the compiler to treat the values as constants.
 
-cdef [[
-struct placeholder {
-  static const int POS = 1;
-  static const int VAL = 2;
-  static const int INV = 2;
-  static const int NEG = 3;
-  static const int SET = 4;
-  static const int UNTIL = 5;
-  static const int RETURN = 6;
-  static const int TEST = 7;     // the current test (either a single character, 
-                                 // a charset or a ".")
-  static const int NEXT = 8;     // the rest of the pattern
-  static const int OPEN = 9;
-  static const int CLOSE = 10;
+local P = {
+  POS = 1,
+  VAL = 2,
+  INV = 2,
+  NEG = 3,
+  SET = 4,
+  UNTIL = 5,
+  RETURN = 6,
+  TEST = 7, -- the current test (either a single character, a charset or a ".")
+  NEXT = 8, -- the rest of the pattern
+  OPEN = 9,
+  CLOSE = 10,
 }
-]]
-
-local P = new "struct placeholder"
 
 local g_i, g_subj, g_ins, g_start, g_end
-
 
 -------------------------------------------------------------------------------
 --- Templates -----------------------------------------------------------------
@@ -396,16 +391,57 @@ local function push(tpl, data, buf, backbuf, ind)
   end
 end
 
---- Character classes...
-cdef [[
-  int isalpha (int c); int iscntrl (int c); int isdigit (int c);
-  int islower (int c); int ispunct (int c); int isspace (int c);
-  int isupper (int c); int isalnum (int c); int isxdigit (int c);]]
+local function isdigit(c)
+  return (c >= B('0') and c <= B('9'))
+end
 
+local function isxdigit(c)
+  return (isdigit(c) or (c >= B('A') and c <= B('F')) or (c >= B('a') and c <= B('f')))
+end
+
+local function isupper(c)
+  return (c >= B('A') and c <= B('Z'))
+end
+
+local function isspace(c)
+  return (c == B(' ') or c == B('\f') or c == B('\n') or c == B('\r') or c == B('\t') or c == B('\v'))
+end
+
+local function isprint(c)
+  return (c >= 0x20 and c <= 0x7E)
+end
+
+local function isalpha(c)
+  return ((c >= B('a') and c <= B('z')) or (c >= B('A') and c <= B('Z')))
+end
+
+local function isalnum(c)
+  return (isalpha(c) or isdigit(c))
+end
+
+local function ispunct(c)
+  return (isprint(c) and not isspace(c) and not isalnum(c))
+end
+
+local function islower(c)
+  return (c >= B('a') and c <= B('z'))
+end
+
+local function iscntrl(c)
+  return (c == 127 or (c >= 0 and c <= 31))
+end
+
+--- Character classes...
 local ccref = {
-  a = "isalpha", c = "iscntrl", d = "isdigit",
-  l = "islower", p = "ispunct", s = "isspace",
-  u = "isupper", w = "isalnum", x = "isxdigit"
+  a = isalpha,
+  c = iscntrl,
+  d = isdigit,
+  l = islower,
+  p = ispunct,
+  s = isspace,
+  u = isupper,
+  w = isalnum,
+  x = isxdigit,
 }
 
 local charclass = setmetatable({}, { __index = function(self, c)
@@ -415,7 +451,7 @@ local charclass = setmetatable({}, { __index = function(self, c)
   for i = 0, 255 do
     -- This is slow, but only used once per
     -- (pair of charachter class) x (program run).
-    if C[func](i) ~= 0 then
+    if func(i) then
       bitset(cc0, i)
     else
       bitset(cc1, i)
@@ -647,15 +683,13 @@ local function pack(sets, ncaps)
   return charsets, caps
 end
 
-cdef [[
-struct M {
-  static const int CODE = 1;
-  static const int SOURCE = 2;
-  static const int NCAPS = 3;
-  static const int CAPS = 4;
-  static const int ANCHORED = 5;
-}]]
-local M = new "struct M" -- fields of the "_M_atchers" table.
+local M = {
+  CODE = 1,
+  SOURCE = 2,
+  NCAPS = 3,
+  CAPS = 4,
+  ANCHORED = 5
+}
 
 function compile(pat, mode) -- local, declared above
   local anchored = (pat:sub(1, 1) == "^") and mode ~= "gmatch"
@@ -796,16 +830,15 @@ end
 
 local gmatch
 do
-  cdef [[
-  struct GM {
-    static const int CODE = 1;
-    static const int SUBJ = 2;
-    static const int PAT = 3;
-    static const int INDEX = 4;
-    static const int PROD = 5;
-    static const int CAPS = 6;
-  }]]
-  local GM = new "struct GM"
+
+  local GM = {
+    CODE = 1,
+    SUBJ = 2,
+    PAT = 3,
+    INDEX = 4,
+    PROD = 5,
+    CAPS = 6
+  }
 
   local function gmatch_iter(state)
     local success = state[GM.CODE](state[GM.SUBJ], state[GM.PAT], state[GM.INDEX])
