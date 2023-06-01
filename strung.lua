@@ -29,7 +29,7 @@ do
   pcall(function()
     local u = require "util"
     expose, noglobals, writelock = u.expose, u.noglobals, u.writelock
-  end)-- throw an error when accessing a global.;
+  end); -- throw an error when accessing a global.;
   (noglobals or type) ""
 end
 
