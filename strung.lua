@@ -43,26 +43,175 @@ local o_setlocale = require "os".setlocale
 local s, t = require "string", require "table"
 
 local s_byte, s_find, s_gmatch, s_gsub, s_len, s_rep, s_sub = s.byte, s.find, s.gmatch, s.gsub, s.len, s.rep, s.sub
+local s_char = s.char
 local B = s.byte
 
 local t_concat, t_insert = t.concat, t.insert
-
-local ffi = require "ffi"
-
-local C, cdef, copy, metatype, new, ffi_string, typeof = ffi.C, ffi.cdef, ffi.copy, ffi.metatype, ffi.new, ffi.string,
-    ffi.typeof
 
 local bit = require("bit")
 local band, bor, bxor = bit.band, bit.bor, bit.xor
 local lshift, rshift, rol = bit.lshift, bit.rshift, bit.rol
 
+local CHECK = false
+
+local function ffi_copy(dst, src, len)
+  for i = 1, len do
+    dst[i - 1] = src[i - 1]
+  end
+
+  return dst
+
+end
+
+local function ffi_string(buf, len)
+  local str = {}
+
+  if len then
+    for i = 1, len do
+      str[i] = s_char(buf[i - 1])
+    end
+  else
+    local i = 0
+    while true do
+      local c = buf[i]
+      if c == 0 then
+        break
+      end
+
+      str[i + 1] = s_char(c)
+
+      i = i + 1
+    end
+  end
+
+  local res = t_concat(str)
+  if CHECK then
+    assert(res == require("ffi").string(buf.test, len))
+  end
+
+  return t_concat(str)
+end
+
 -------------------------------------------------------------------------------
 --- C types ---
+local function ffi_buffer(len)
+  local buf = {
+    pointer = 0,
+    values = {},
+  }
 
-local u32ary    = typeof "uint32_t[?]"
-local u32ptr    = typeof "uint32_t *"
-local constchar = typeof "const unsigned char *"
+  if CHECK then
+    buf.test = require("ffi").new("uint32_t[?]", len)
+    buf.trace = require("debug").traceback()
+  end
 
+
+  setmetatable(buf, {
+    __tostring = function(self)
+      local str = { "i=" .. self.pointer, ":[" }
+      for i = 1, #self.values do
+        str[i + 2] = (self.values[i] or "#") .. "/" .. self.test[i - 1] .. " "
+      end
+
+      str[#str + 1] = "]"
+
+      return t_concat(str, " ")
+    end,
+    __index = function(buf, num)
+      local res = buf.values[buf.pointer + num + 1] or 0
+
+      if CHECK then
+        local test = buf.test[num]
+        assert(res == test)
+      end
+
+      return res
+    end,
+    __newindex = function(buf, index, val)
+      if CHECK then
+
+        buf.test[index] = val
+      end
+
+      -- handle uint32_t overflow
+      if val < 0 then
+        val = val + 4294967296
+      end
+
+      buf.values[buf.pointer + index + 1] = val
+      if CHECK then
+        assert(buf[0])
+      end
+    end,
+    __add = function(a, b)
+      if type(a) == "table" then
+        a.pointer = a.pointer + b
+        if CHECK then
+          a.test = a.test + b
+          assert(buf[0])
+
+        end
+        return a
+      elseif type(b) == "table" then
+        b.pointer = b.pointer + a
+
+        if CHECK then
+          b.test = b.test + a
+          assert(buf[0])
+
+        end
+        return b
+      end
+
+      error("UH OH")
+    end,
+    __sub = function(a, b)
+      if type(a) == "table" then
+        a.pointer = a.pointer - b
+        if CHECK then
+          a.test = a.test - b
+          assert(buf[0])
+
+        end
+        return a
+      elseif type(b) == "table" then
+        b.pointer = a - b.pointer
+        if CHECK then
+          b.test = a - b.test
+          assert(buf[0])
+
+        end
+        return b
+      end
+
+      error("UH OH")
+    end
+  })
+
+  for i = 1, len do
+    buf[i - 1] = 0
+  end
+
+
+  return buf
+end
+
+local copy = ffi_copy
+
+local u32ary
+u32ary = function(len)
+  return ffi_buffer(len)
+end
+local u32ptr = function(buf)
+  return buf
+end
+local constchar = function(str)
+  local buf = ffi_buffer(#str)
+  for i = 0, #str - 1 do
+    buf[i] = s_byte(str, i + 1)
+  end
+  return buf
+end
 
 -------------------------------------------------------------------------------
 --- bit sets
@@ -873,26 +1022,16 @@ local gsub
 do
   -- buffers
   local BUFF_INIT_SIZE = 16
-  cdef "void* malloc (size_t size);"
-  cdef "void free (void* ptr);"
-  local charsize = ffi.sizeof "char"
-  local acache = setmetatable({}, { __mode = "k" })
+  local charsize = 1
 
   local function malloc(s)
-    local p = C.malloc(s)
-    if p == nil then
-      collectgarbage()
-      p = C.malloc(s)
-    end
-    if p == nil then error "out of memory, `ffi.C.malloc()` failed" end
-    return p
+    return ffi_buffer(s)
   end
 
-  local Buffer = metatype(
-  --               size,       index,            array
-    "struct{uint32_t s; uint32_t i; unsigned char* a;}",
-    { __gc = function(self) C.free(self.a) end }
-  )
+  local Buffer = function(size, index, arr)
+    return { s = size, i = index, a = arr }
+  end
+
   local function buffer()
     local b = Buffer(
       BUFF_INIT_SIZE,
@@ -906,14 +1045,14 @@ do
     if size <= buf.s then return end
     repeat buf.s = buf.s * 2 until size <= buf.s
     local a = malloc(buf.s * charsize)
-    ffi.copy(a, buf.a, buf.i)
-    ffi.C.free(buf.a)
+    ffi_copy(a, buf.a, buf.i)
+    -- ffi.C.free(buf.a)
     buf.a = a
   end
 
   local function mergebuf(acc, new)
     reserve(acc, acc.i + new.i)
-    copy(acc.a + acc.i, new.a, new.i)
+    ffi_copy(acc.a + acc.i, new.a, new.i)
     acc.i = acc.i + new.i
   end
 
