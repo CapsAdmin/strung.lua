@@ -1,4 +1,4 @@
-local USE_FFI = true
+local USE_FFI = false
 local USE_FULL_FFI = false
 
 if USE_FULL_FFI then USE_FFI = false end
@@ -35,7 +35,7 @@ local function ffi_stringx(buf, len)
 
 	if len then
 		for i = 1, len do
-			str[i] = s_char(buf[i - 1])
+			str[i] = string.char(buf[i - 1])
 		end
 	else
 		local i = 0
@@ -45,13 +45,12 @@ local function ffi_stringx(buf, len)
 
 			if c == 0 then break end
 
-			str[i + 1] = s_char(c)
+			str[i + 1] = string.char(c)
 			i = i + 1
 		end
 	end
 
-	local res = t_concat(str)
-	return t_concat(str)
+	return table.concat(str)
 end
 
 local ffi_buffer
@@ -65,11 +64,11 @@ do
 		local str = {"i=" .. self.pointer, ":["}
 
 		for i = 1, #self.values do
-			str[i + 2] = (self.values[i] or "#") .. "/" .. self.test[i - 1] .. " "
+			str[i + 2] = (self.values[i] or "#")
 		end
 
 		str[#str + 1] = "]"
-		return t_concat(str, " ")
+		return table.concat(str, " ")
 	end
 
 	function meta:__index(index)
@@ -77,12 +76,17 @@ do
 			return self.ffi_buffer[index] 
 		end
 
-		assert(
-			index >= 0 and index < self.length,
-			"index out of bounds " .. index .. " " .. self.length
-		)
-		local res = self.values[self.pointer + index + 1] or 0
-		return res
+		index = self.pointer + index + 1
+
+		if index < 0 then
+			error("index < 0" .. index)
+		end
+
+		if index > self.length then
+			error("index > length" .. index .. " " .. self.length)
+		end
+
+		return self.values[index] or 0
 	end
 
 	function meta:__newindex(index, val)
@@ -91,64 +95,50 @@ do
 			return
 		end
 
-		assert(
-			index >= 0 and index < self.length,
-			"index out of bounds " .. index .. " " .. self.length
-		)
-
 		-- handle uint32_t overflow
 		if val < 0 then val = bit.band(val, bit.bnot(0)) end
 
-		self.values[self.pointer + index + 1] = val
+		index = self.pointer + index + 1
+
+		if index < 0 then
+			error("index < 0" .. index)
+		end
+
+		if index > self.length then
+			error("index > length" .. index .. " " .. self.length)
+		end
+
+		self.values[index] = val
+	end
+
+	function meta:PointerOffset(offset)
+		if USE_FFI then
+			return ffi_buffer(self.ffi_buffer + offset, self.type)
+		end
+
+		local new = ffi_buffer()
+		new.pointer = self.pointer + offset
+		for i,v in ipairs(self.values) do
+			new.values[i] = v
+		end
+		return new
 	end
 
 	function meta.__add(a, b)
-		if USE_FFI then
-			if type(a) == "table" then
-				return ffi_buffer(a.ffi_buffer + b, a.type)
-			elseif type(b) == "table" then
-				return ffi_buffer(a + b.ffi_buffer, b.type)
-			end
-		end
-
 		if type(a) == "table" then
-			a.pointer = a.pointer + b
-			return a
+			return a:PointerOffset(b)
 		elseif type(b) == "table" then
-			b.pointer = b.pointer + a
-			return b
+			return b:PointerOffset(a)
 		end
 
 		error("UH OH")
 	end
 
 	function meta.__sub(a, b)
-		if USE_FFI then
-			if type(a) == "table" then
-				return ffi_buffer(a.ffi_buffer - b, a.type)
-			elseif type(b) == "table" then
-				return ffi_buffer(a - b.ffi_buffer, b.type)
-			end
-		end
-
 		if type(a) == "table" then
-			a.pointer = a.pointer - b
-
-			if CHECK then
-				a.test = a.test - b
-				assert(a[0])
-			end
-
-			return a
+			return a:PointerOffset(-b)
 		elseif type(b) == "table" then
-			b.pointer = a - b.pointer
-
-			if CHECK then
-				b.test = a - b.test
-				assert(b[0])
-			end
-
-			return b
+			return b:PointerOffset(-a)
 		end
 
 		error("UH OH")
@@ -158,6 +148,7 @@ do
 		local self = {}
 
 		self.type = t
+		self.PointerOffset = meta.PointerOffset
 
 		if USE_FFI then
 			if type(len) == "cdata" then
@@ -175,17 +166,28 @@ do
 				error("UH OH" .. type(len))
 			end
 		else
-			self.pointer = 0
-			self.values = {}
-			self.length = len
+			if type(len) == "table" then
+				self.pointer = len.pointer
+				self.length = len.length
+				self.values = {}
+				for i,v in ipairs(len.values) do
+					self.values[i] = v
+				end
+			else
+				self.pointer = 0
+				self.values = {}
+				self.length = len or math.huge
+			end
 		end
 
 		setmetatable(self, meta)
 
 		if USE_FFI then return self end
 
-		for i = 1, len do
-			self[i - 1] = 0
+		if type(len) == "number" then
+			for i = 1, len do
+				self[i - 1] = 0
+			end
 		end
 
 		return self
@@ -249,6 +251,10 @@ if ffi then
 	C, cdef, copy, metatype, new, ffi_string, typeof = ffi.C, ffi.cdef, ffi.copy, ffi.metatype, ffi.new, ffi.string, ffi.typeof
 end
 if USE_FFI then
+	copy = ffi_copy
+	new = ffi_buffer
+	ffi_string = ffi_stringx
+elseif not USE_FULL_FFI then
 	copy = ffi_copy
 	new = ffi_buffer
 	ffi_string = ffi_stringx
