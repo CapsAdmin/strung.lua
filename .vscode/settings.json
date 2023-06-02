@@ -3,5 +3,9 @@
       "onsave": [
         "**/*.lua",
       ]
-    }
+    },
+    "nattlua.path": "/home/caps/projects/NattLua/nattlua.lua",
+    "nattlua.arguments": [
+      "language-server"
+    ],
 }
