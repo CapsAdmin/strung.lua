@@ -1,9 +1,20 @@
-local USE_FFI = false
-local USE_FULL_FFI = true
+local USE_FFI = true
+local USE_FULL_FFI = false
+
+if USE_FULL_FFI then USE_FFI = false end
 local ffi = (USE_FFI or USE_FULL_FFI) and require("ffi") or nil
 
 local function ffi_copy(dst, src, len)
-	if USE_FFI then return ffi.copy(dst.ffi_buffer, src.ffi_buffer, len) end
+	if USE_FFI then
+		if type(dst) == "table" then
+			dst = dst.ffi_buffer
+		end
+
+		if type(src) == "table" then
+			src = src.ffi_buffer
+		end
+
+		return ffi.copy(dst, src, len) end
 
 	for i = 1, len do
 		dst[i - 1] = src[i - 1]
@@ -13,7 +24,12 @@ local function ffi_copy(dst, src, len)
 end
 
 local function ffi_stringx(buf, len)
-	if USE_FFI then return ffi.string(buf.ffi_buffer, len) end
+	if USE_FFI then 
+		if type(buf) == "table" then
+			buf = buf.ffi_buffer
+		end
+		return ffi.string(buf, len) 
+	end
 
 	local str = {}
 
@@ -57,7 +73,9 @@ do
 	end
 
 	function meta:__index(index)
-		if USE_FFI then return self.ffi_buffer[index] end
+		if USE_FFI then
+			return self.ffi_buffer[index] 
+		end
 
 		assert(
 			index >= 0 and index < self.length,
@@ -87,9 +105,9 @@ do
 	function meta.__add(a, b)
 		if USE_FFI then
 			if type(a) == "table" then
-				return ffi_buffer(a.ffi_buffer + b)
+				return ffi_buffer(a.ffi_buffer + b, a.type)
 			elseif type(b) == "table" then
-				return ffi_buffer(a + b.ffi_buffer)
+				return ffi_buffer(a + b.ffi_buffer, b.type)
 			end
 		end
 
@@ -107,9 +125,9 @@ do
 	function meta.__sub(a, b)
 		if USE_FFI then
 			if type(a) == "table" then
-				return ffi_buffer(a.ffi_buffer - b)
+				return ffi_buffer(a.ffi_buffer - b, a.type)
 			elseif type(b) == "table" then
-				return ffi_buffer(a - b.ffi_buffer)
+				return ffi_buffer(a - b.ffi_buffer, b.type)
 			end
 		end
 
@@ -136,11 +154,26 @@ do
 		error("UH OH")
 	end
 
-	ffi_buffer = function(len)
+	ffi_buffer = function(len, t)
 		local self = {}
 
+		self.type = t
+
 		if USE_FFI then
-			self.ffi_buffer = type(len) == "cdata" and len or ffi.new("uint32_t[?]", len)
+			if type(len) == "cdata" then
+				if t == "unsigned char [?]" then
+					t = "unsigned char *"
+				end
+				self.ffi_buffer = ffi.cast(t, len)
+			elseif type(len) == "table" then
+				self.ffi_buffer = ffi.cast(t, len.ffi_buffer) 
+			elseif type(len) == "string" then
+				self.ffi_buffer = ffi.cast(t, len) 
+			elseif type(len) == "number" then
+				self.ffi_buffer = ffi.new(t, len) 
+			else
+				error("UH OH" .. type(len))
+			end
 		else
 			self.pointer = 0
 			self.values = {}
@@ -235,13 +268,13 @@ if USE_FULL_FFI then
 	constchar = typeof("const unsigned char *")
 else
 	u32ary = function(len)
-		return ffi_buffer(len)
+		return ffi_buffer(len, "uint32_t[?]")
 	end
 	u32ptr = function(buf)
-		return buf
+		return ffi_buffer(buf, "uint32_t *")
 	end
 	constchar = function(str)
-		if USE_FFI then return ffi_buffer(ffi.new("const char *", str)) end
+		if USE_FFI then return ffi_buffer(str, "const unsigned char *") end
 
 		local buf = ffi_buffer(#str)
 
@@ -622,21 +655,21 @@ end
 local ccref
 
 --- Character classes...
-if USE_FULL_FFI then
+if USE_FULL_FFI and false then
 	cdef[[
 	int isalpha (int c); int iscntrl (int c); int isdigit (int c);
 	int islower (int c); int ispunct (int c); int isspace (int c);
 	int isupper (int c); int isalnum (int c); int isxdigit (int c);]]
 	ccref = {
-		a = C.isalpha,
-		c = C.iscntrl,
-		d = C.isdigit,
-		l = C.islower,
-		p = C.ispunct,
-		s = C.isspace,
-		u = C.isupper,
-		w = C.isalnum,
-		x = C.isxdigit,
+		a = function(c) return C.isalpha(c) ~= 0 end,
+		c = function(c) return C.iscntrl(c) ~= 0 end,
+		d = function(c) return C.isdigit(c) ~= 0 end,
+		l = function(c) return C.islower(c) ~= 0 end,
+		p = function(c) return C.ispunct(c) ~= 0 end,
+		s = function(c) return C.isspace(c) ~= 0 end,
+		u = function(c) return C.isupper(c) ~= 0 end,
+		w = function(c) return C.isalnum(c) ~= 0 end,
+		x = function(c) return C.isxdigit(c) ~= 0 end,
 	}
 else
 	local B = s_byte
@@ -718,7 +751,7 @@ local charclass = setmetatable(
 			for i = 0, 255 do
 				-- This is slow, but only used once per
 				-- (pair of charachter class) x (program run).
-				if func(i) ~= 0 then bitset(cc0, i) else bitset(cc1, i) end
+				if func(i) then bitset(cc0, i) else bitset(cc1, i) end
 			end
 
 			self[c:lower()] = cc0
@@ -1201,15 +1234,27 @@ do
 				end,
 			}
 		)
+
+		if true then
+			free = function() end
+			malloc = function(s)
+				return ffi.new("unsigned char[?]", s)
+			end
+			Buffer = function(size, index, arr)
+				return {s = size, i = index, a = arr}
+			end
+		end
 	else
 		charsize = 1
 		malloc = function(s)
-			return ffi_buffer(s)
+			return ffi_buffer(s, "unsigned char [?]")
 		end
 		free = function() end
 		Buffer = function(size, index, arr)
 			return {s = size, i = index, a = arr}
 		end
+
+		
 	end
 
 	local function buffer()
