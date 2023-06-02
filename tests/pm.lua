@@ -11,6 +11,16 @@ function f1(s, p)
   p = strung.gsub(p, "%%([0-9])", function(s) return "%" .. (s + 1) end)
   p = strung.gsub(p, "^(^?)", "%1()", 1)
   p = strung.gsub(p, "($?)$", "()%1", 1)
+
+  do
+    print("|"..s.."|", "|"..p.."|", #s, #p)
+    local s = "alo alx 123 bo bo"
+    local p = "()"
+    print("|"..s.."|", "|"..p.."|", #s, #p)
+    local t = {strung.match("alo alx 123 bo bo", "()")}
+    for i = 1, #t do print(i, t[i]) end
+  end
+  
   local t = { strung.match(s, p) }
   return string.sub(s, t[1], t[#t] - 1)
 end

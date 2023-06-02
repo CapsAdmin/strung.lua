@@ -33,21 +33,15 @@ local function ffi_stringx(buf, len)
 
 	local str = {}
 
-	if len then
-		for i = 1, len do
-			str[i] = string.char(buf[i - 1])
-		end
-	else
-		local i = 0
+	local i = 0
+	while true do
+		local c = buf[i]
 
-		while true do
-			local c = buf[i]
-
-			if c == 0 then break end
-
-			str[i + 1] = string.char(c)
-			i = i + 1
-		end
+		if len and i >= len then break end
+		if c == 0 then break end
+		
+		str[i + 1] = string.char(c)
+		i = i + 1
 	end
 
 	return table.concat(str)
@@ -1530,6 +1524,7 @@ do
 		_VERSION = "1.0.0-rc1",
 	}
 end
+
 
 -------------------------------------------------------------------------------
 return strung
