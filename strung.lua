@@ -1,20 +1,21 @@
 local USE_FFI = false
+local FFI_COMPARE = true
 local USE_FULL_FFI = false
+local _G = _G
 
 if USE_FULL_FFI then USE_FFI = false end
+
 local ffi = (USE_FFI or USE_FULL_FFI) and require("ffi") or nil
+local ffi_stringx
 
 local function ffi_copy(dst, src, len)
 	if USE_FFI then
-		if type(dst) == "table" then
-			dst = dst.ffi_buffer
-		end
+		if type(dst) == "table" then dst = dst.ffi_buffer end
 
-		if type(src) == "table" then
-			src = src.ffi_buffer
-		end
+		if type(src) == "table" then src = src.ffi_buffer end
 
-		return ffi.copy(dst, src, len) end
+		return ffi.copy(dst, src, len)
+	end
 
 	for i = 1, len do
 		dst[i - 1] = src[i - 1]
@@ -23,23 +24,23 @@ local function ffi_copy(dst, src, len)
 	return dst
 end
 
-local function ffi_stringx(buf, len)
-	if USE_FFI then 
-		if type(buf) == "table" then
-			buf = buf.ffi_buffer
-		end
-		return ffi.string(buf, len) 
+function ffi_stringx(buf, len)
+	if USE_FFI then
+		if type(buf) == "table" then buf = buf.ffi_buffer end
+
+		return ffi.string(buf, len)
 	end
 
 	local str = {}
-
 	local i = 0
+
 	while true do
 		local c = buf[i]
 
 		if len and i >= len then break end
-		if c == 0 then break end
-		
+
+		if not len and c == 0 then break end
+
 		str[i + 1] = string.char(c)
 		i = i + 1
 	end
@@ -66,15 +67,11 @@ do
 	end
 
 	function meta:__index(index)
-		if USE_FFI then
-			return self.ffi_buffer[index] 
-		end
+		if USE_FFI then return self.ffi_buffer[index] end
 
 		index = self.pointer + index + 1
 
-		if index < 0 then
-			error("index < 0" .. index)
-		end
+		if index < 0 then error("index < 0" .. index) end
 
 		if index > self.length then
 			error("index > length" .. index .. " " .. self.length)
@@ -84,19 +81,17 @@ do
 	end
 
 	function meta:__newindex(index, val)
+		-- handle uint32_t overflow
+		if val < 0 then val = val % 0xFFFFFFFF + 1 end
+
 		if USE_FFI then
 			self.ffi_buffer[index] = val
 			return
 		end
 
-		-- handle uint32_t overflow
-		if val < 0 then val = bit.band(val, bit.bnot(0)) end
-
 		index = self.pointer + index + 1
 
-		if index < 0 then
-			error("index < 0" .. index)
-		end
+		if index < 0 then error("index < 0" .. index) end
 
 		if index > self.length then
 			error("index > length" .. index .. " " .. self.length)
@@ -106,15 +101,15 @@ do
 	end
 
 	function meta:PointerOffset(offset)
-		if USE_FFI then
-			return ffi_buffer(self.ffi_buffer + offset, self.type)
-		end
+		if USE_FFI then return ffi_buffer(self.ffi_buffer + offset, self.type) end
 
 		local new = ffi_buffer()
 		new.pointer = self.pointer + offset
-		for i,v in ipairs(self.values) do
+
+		for i, v in ipairs(self.values) do
 			new.values[i] = v
 		end
+
 		return new
 	end
 
@@ -140,22 +135,20 @@ do
 
 	ffi_buffer = function(len, t)
 		local self = {}
-
 		self.type = t
 		self.PointerOffset = meta.PointerOffset
 
 		if USE_FFI then
 			if type(len) == "cdata" then
-				if t == "unsigned char [?]" then
-					t = "unsigned char *"
-				end
+				if t == "unsigned char [?]" then t = "unsigned char *" end
+
 				self.ffi_buffer = ffi.cast(t, len)
 			elseif type(len) == "table" then
-				self.ffi_buffer = ffi.cast(t, len.ffi_buffer) 
+				self.ffi_buffer = ffi.cast(t, len.ffi_buffer)
 			elseif type(len) == "string" then
-				self.ffi_buffer = ffi.cast(t, len) 
+				self.ffi_buffer = ffi.cast(t, len)
 			elseif type(len) == "number" then
-				self.ffi_buffer = ffi.new(t, len) 
+				self.ffi_buffer = ffi.new(t, len)
 			else
 				error("UH OH" .. type(len))
 			end
@@ -164,7 +157,8 @@ do
 				self.pointer = len.pointer
 				self.length = len.length
 				self.values = {}
-				for i,v in ipairs(len.values) do
+
+				for i, v in ipairs(len.values) do
 					self.values[i] = v
 				end
 			else
@@ -241,9 +235,11 @@ local s_byte, s_find, s_gmatch, s_gsub, s_len, s_rep, s_sub = s.byte, s.find, s.
 local t_concat, t_insert = t.concat, t.insert
 --local ffi = require("ffi")
 local C, cdef, copy, metatype, new, ffi_string, typeof
+
 if ffi then
 	C, cdef, copy, metatype, new, ffi_string, typeof = ffi.C, ffi.cdef, ffi.copy, ffi.metatype, ffi.new, ffi.string, ffi.typeof
 end
+
 if USE_FFI then
 	copy = ffi_copy
 	new = ffi_buffer
@@ -253,6 +249,7 @@ elseif not USE_FULL_FFI then
 	new = ffi_buffer
 	ffi_string = ffi_stringx
 end
+
 local bit = require("bit")
 local band, bor, bxor = bit.band, bit.bor, bit.xor
 local lshift, rshift, rol = bit.lshift, bit.rshift, bit.rol
@@ -661,15 +658,33 @@ if USE_FULL_FFI and false then
 	int islower (int c); int ispunct (int c); int isspace (int c);
 	int isupper (int c); int isalnum (int c); int isxdigit (int c);]]
 	ccref = {
-		a = function(c) return C.isalpha(c) ~= 0 end,
-		c = function(c) return C.iscntrl(c) ~= 0 end,
-		d = function(c) return C.isdigit(c) ~= 0 end,
-		l = function(c) return C.islower(c) ~= 0 end,
-		p = function(c) return C.ispunct(c) ~= 0 end,
-		s = function(c) return C.isspace(c) ~= 0 end,
-		u = function(c) return C.isupper(c) ~= 0 end,
-		w = function(c) return C.isalnum(c) ~= 0 end,
-		x = function(c) return C.isxdigit(c) ~= 0 end,
+		a = function(c)
+			return C.isalpha(c) ~= 0
+		end,
+		c = function(c)
+			return C.iscntrl(c) ~= 0
+		end,
+		d = function(c)
+			return C.isdigit(c) ~= 0
+		end,
+		l = function(c)
+			return C.islower(c) ~= 0
+		end,
+		p = function(c)
+			return C.ispunct(c) ~= 0
+		end,
+		s = function(c)
+			return C.isspace(c) ~= 0
+		end,
+		u = function(c)
+			return C.isupper(c) ~= 0
+		end,
+		w = function(c)
+			return C.isalnum(c) ~= 0
+		end,
+		x = function(c)
+			return C.isxdigit(c) ~= 0
+		end,
 	}
 else
 	local B = s_byte
@@ -1253,8 +1268,6 @@ do
 		Buffer = function(size, index, arr)
 			return {s = size, i = index, a = arr}
 		end
-
-		
 	end
 
 	local function buffer()
@@ -1524,7 +1537,6 @@ do
 		_VERSION = "1.0.0-rc1",
 	}
 end
-
 
 -------------------------------------------------------------------------------
 return strung

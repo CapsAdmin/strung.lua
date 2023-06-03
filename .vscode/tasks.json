@@ -12,7 +12,7 @@
                 "showReuseMessage": false,
                 "clear": true
             },
-            "command": "cd ${workspaceFolder} && luajit tests/pm.lua"
+             "command": "cd ${workspaceFolder} && luajit tests/gsub.lua && luajit tests/patterns.lua && luajit tests/pm.lua && luajit tests/static.lua"
         }
     ]
 }
