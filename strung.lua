@@ -54,8 +54,6 @@ do
 	local meta = {}
 
 	function meta:__tostring()
-		if USE_FFI then return tostring(self.ffi_buffer) end
-
 		local str = {"i=" .. self.pointer, ":["}
 
 		for i = 1, #self.values do
@@ -66,9 +64,7 @@ do
 		return table.concat(str, " ")
 	end
 
-	function meta:__index(index)
-		if USE_FFI then return self.ffi_buffer[index] end
-
+	local function get_index_offset(self, index)
 		index = self.pointer + index + 1
 
 		if index < 0 then error("index < 0" .. index) end
@@ -77,7 +73,13 @@ do
 			error("index > length" .. index .. " " .. self.length)
 		end
 
-		return self.values[index] or 0
+		return index
+	end
+
+	function meta:__index(index)
+		if USE_FFI then return self.ffi_buffer[index] end
+
+		return self.values[get_index_offset(index)] or 0
 	end
 
 	function meta:__newindex(index, val)
@@ -89,15 +91,7 @@ do
 			return
 		end
 
-		index = self.pointer + index + 1
-
-		if index < 0 then error("index < 0" .. index) end
-
-		if index > self.length then
-			error("index > length" .. index .. " " .. self.length)
-		end
-
-		self.values[index] = val
+		self.values[get_index_offset(self, index)] = val
 	end
 
 	function meta:PointerOffset(offset)
@@ -178,8 +172,6 @@ do
 
 		setmetatable(self, meta)
 
-		if USE_FFI then return self end
-
 		if type(len) == "number" then
 			for i = 1, len do
 				self[i - 1] = 0
@@ -248,11 +240,7 @@ if ffi then
 	C, cdef, copy, metatype, new, ffi_string, typeof = ffi.C, ffi.cdef, ffi.copy, ffi.metatype, ffi.new, ffi.string, ffi.typeof
 end
 
-if USE_FFI then
-	copy = ffi_copy
-	new = ffi_buffer
-	ffi_string = ffi_stringx
-elseif not USE_FULL_FFI then
+if not USE_FULL_FFI then
 	copy = ffi_copy
 	new = ffi_buffer
 	ffi_string = ffi_stringx
