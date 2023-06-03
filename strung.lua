@@ -1,6 +1,7 @@
-local USE_FFI = true
-local FFI_COMPARE = true
+local USE_FFI = false
+local FFI_COMPARE = false
 local USE_FULL_FFI = false
+local REPORT_MISMATCH = false
 local _G = _G
 
 if USE_FULL_FFI then USE_FFI = false end
@@ -9,28 +10,16 @@ local ffi = (USE_FFI or USE_FULL_FFI) and require("ffi") or nil
 local ffi_stringx
 
 local function ffi_copy(dst, src, len)
-	if USE_FFI then
-		if type(dst) == "table" then dst = dst.ffi_buffer end
-
-		if type(src) == "table" then src = src.ffi_buffer end
-
-		return ffi.copy(dst, src, len)
-	end
-
 	for i = 1, len do
 		dst[i - 1] = src[i - 1]
 	end
+
+	if USE_FFI then ffi.copy(dst.ffi_buffer, src.ffi_buffer, len) end
 
 	return dst
 end
 
 function ffi_stringx(buf, len)
-	if USE_FFI then
-		if type(buf) == "table" then buf = buf.ffi_buffer end
-
-		return ffi.string(buf, len)
-	end
-
 	local str = {}
 	local i = 0
 
@@ -45,6 +34,16 @@ function ffi_stringx(buf, len)
 		i = i + 1
 	end
 
+	if USE_FFI then
+		local res = ffi.string(buf.ffi_buffer, len)
+
+		if table.concat(str) ~= res then
+			print("ffi.string mismatch:", table.concat(str), res)
+		end
+
+		return res
+	end
+
 	return table.concat(str)
 end
 
@@ -57,61 +56,26 @@ do
 		local str = {"i=" .. self.pointer, ":["}
 
 		for i = 1, #self.values do
-			str[i + 2] = (self.values[i] or "#")
+			local v = (self.values[i] or "#")
+
+			if USE_FFI then
+				if v ~= self.ffi_buffer[i - 1] then
+					v = v .. "~=" .. self.ffi_buffer[i - 1]
+				end
+			end
+
+			table.insert(str, v)
 		end
 
 		str[#str + 1] = "]"
 		return table.concat(str, " ")
 	end
 
-	local function get_index_offset(self, index)
-		index = self.pointer + index + 1
-
-		if index < 0 then error("index < 0" .. index) end
-
-		if index > self.length then
-			error("index > length" .. index .. " " .. self.length)
-		end
-
-		return index
-	end
-
-	function meta:__index(index)
-		if USE_FFI then return self.ffi_buffer[index] end
-
-		return self.values[get_index_offset(index)] or 0
-	end
-
-	function meta:__newindex(index, val)
-		-- handle uint32_t overflow
-		if val < 0 then val = val % 0xFFFFFFFF + 1 end
-
-		if USE_FFI then
-			self.ffi_buffer[index] = val
-			return
-		end
-
-		self.values[get_index_offset(self, index)] = val
-	end
-
-	function meta:PointerOffset(offset)
-		if USE_FFI then return ffi_buffer(self.ffi_buffer + offset, self.type) end
-
-		local new = ffi_buffer()
-		new.pointer = self.pointer + offset
-
-		for i, v in ipairs(self.values) do
-			new.values[i] = v
-		end
-
-		return new
-	end
-
 	function meta.__add(a, b)
 		if type(a) == "table" then
-			return a:PointerOffset(b)
+			return (a:PointerOffset(b))
 		elseif type(b) == "table" then
-			return b:PointerOffset(a)
+			return (b:PointerOffset(a))
 		end
 
 		error("UH OH")
@@ -119,65 +83,138 @@ do
 
 	function meta.__sub(a, b)
 		if type(a) == "table" then
-			return a:PointerOffset(-b)
+			return (a:PointerOffset(-b))
 		elseif type(b) == "table" then
-			return b:PointerOffset(-a)
+			return (b:PointerOffset(-a))
 		end
 
 		error("UH OH")
+	end
+
+	local function get_index_offset(self, index)
+		index = self.pointer + index + 1
+
+		if index < 0 then print("index < 0" .. index) end
+
+		if index > self.length then
+			print("index > length " .. index .. " " .. self.length)
+		end
+
+		return index
+	end
+
+	function meta:__index(index)
+		if type(index) == "string" then
+			error("string index: " .. index .. " " .. debug.traceback())
+		end
+
+		local val = self.values[get_index_offset(self, index)] or 0
+
+		if USE_FFI then
+			local res = self.ffi_buffer[index]
+
+			if REPORT_MISMATCH then
+				if res ~= val then
+					print("ffi_buffer[" .. index .. "]: " .. "" .. res .. " ~= " .. val)
+				end
+			end
+
+			return res
+		end
+
+		return val
+	end
+
+	function meta:__newindex(index, val)
+		-- handle uint32_t overflow
+		if val < 0 then val = val % 0xFFFFFFFF + 1 end
+
+		local index_offset = get_index_offset(self, index)
+		self.values[index_offset] = val
+
+		if USE_FFI then
+			self.ffi_buffer[index] = val
+
+			if REPORT_MISMATCH then
+				if self[index] ~= val then
+					print(
+						"ffi_buffer[" .. index .. "] = " .. val .. " mismatch:",
+						self.ffi_buffer[index_offset],
+						val
+					)
+				end
+			end
+		end
+	end
+
+	function meta:PointerOffset(offset)
+		local new = ffi_buffer()
+
+		if USE_FFI then
+			rawset(new, "type", self.type)
+			rawset(new, "ffi_buffer", self.ffi_buffer + offset)
+		end
+
+		new.pointer = self.pointer + offset
+		new.values = self.values
+
+		for i, v in ipairs(self.values) do
+
+		--new.values[i] = v
+		end
+
+		if USE_FFI then
+			if self.length ~= math.huge then
+				for i = 0, self.length - 1 do
+					local x = self[i]
+				end
+			end
+		end
+
+		return new
 	end
 
 	ffi_buffer = function(len, t)
 		local self = {}
 		self.type = t
 		self.PointerOffset = meta.PointerOffset
+		self.trace = debug.traceback()
 
-		if USE_FFI then
-			if type(len) == "cdata" then
-				if t == "unsigned char [?]" then t = "unsigned char *" end
+		if type(len) == "table" then
+			self.length = len.length
+			self.pointer = len.pointer
+			self.values = {}
 
-				self.ffi_buffer = ffi.cast(t, len)
-			elseif type(len) == "table" then
-				self.ffi_buffer = ffi.cast(t, len.ffi_buffer)
-			elseif type(len) == "string" then
-				self.ffi_buffer = ffi.cast(t, len)
-			elseif type(len) == "number" then
-				self.ffi_buffer = ffi.new(t, len)
-			else
-				error("UH OH" .. type(len))
+			for i, v in ipairs(len.values) do
+				self.values[i] = v
 			end
+
+			if USE_FFI then self.ffi_buffer = ffi.cast(t, len.ffi_buffer) end
+		elseif type(len) == "string" then
+			self.length = #len
+			self.pointer = 0
+			self.values = {}
+
+			for i = 1, #len do
+				self.values[i] = string.byte(len, i)
+			end
+
+			if USE_FFI then self.ffi_buffer = ffi.cast(t, len) end
 		else
-			if type(len) == "table" then
-				self.pointer = len.pointer
-				self.length = len.length
-				self.values = {}
+			self.length = type(len) == "number" and len or math.huge
+			self.pointer = 0
+			self.values = {}
 
-				for i, v in ipairs(len.values) do
-					self.values[i] = v
+			if type(len) == "number" then
+				for i = 1, len do
+					self.values[i] = 0
 				end
-			elseif type(len) == "string" then
-				self.length = #len
-				self.pointer = 0
-				self.values = {}
-
-				for i = 1, #str do
-					self.values[i] = string.byte(str, i)
-				end
-			else
-				self.pointer = 0
-				self.values = {}
-				self.length = len or math.huge
 			end
+
+			if t then if USE_FFI then self.ffi_buffer = ffi.new(t, len, 0) end end
 		end
 
 		setmetatable(self, meta)
-
-		if type(len) == "number" then
-			for i = 1, len do
-				self[i - 1] = 0
-			end
-		end
-
 		return self
 	end
 end
@@ -261,13 +298,13 @@ if USE_FULL_FFI then
 	constchar = typeof("const unsigned char *")
 else
 	u32ary = function(len)
-		return ffi_buffer(len, "uint32_t[?]")
+		return (ffi_buffer(len, "uint32_t[?]"))
 	end
 	u32ptr = function(buf)
-		return ffi_buffer(buf, "uint32_t *")
+		return (ffi_buffer(buf, "uint32_t *"))
 	end
 	constchar = function(str)
-		return ffi_buffer(str, "const unsigned char *")
+		return (ffi_buffer(str, "const unsigned char *"))
 	end
 end
 
@@ -279,7 +316,7 @@ end
 --   return bitary(rshift(n+31, 5))
 -- end
 local function bittest(b, i)
-	return band(rshift(b[rshift(i, 5)], i), 1) ~= 0
+	return (band(rshift(b[rshift(i, 5)], i), 1) ~= 0)
 end
 
 local function bitset(b, i)
@@ -1250,7 +1287,7 @@ do
 	else
 		charsize = 1
 		malloc = function(s)
-			return ffi_buffer(s, "unsigned char [?]")
+			return ffi_buffer(s, "unsigned char[?]")
 		end
 		free = function() end
 		Buffer = function(size, index, arr)
