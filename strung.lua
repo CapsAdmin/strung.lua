@@ -1,4 +1,4 @@
-local USE_FFI = false
+local USE_FFI = true
 local FFI_COMPARE = true
 local USE_FULL_FFI = false
 local _G = _G
@@ -161,6 +161,14 @@ do
 				for i, v in ipairs(len.values) do
 					self.values[i] = v
 				end
+			elseif type(len) == "string" then
+				self.length = #len
+				self.pointer = 0
+				self.values = {}
+
+				for i = 1, #str do
+					self.values[i] = string.byte(str, i)
+				end
 			else
 				self.pointer = 0
 				self.values = {}
@@ -271,15 +279,7 @@ else
 		return ffi_buffer(buf, "uint32_t *")
 	end
 	constchar = function(str)
-		if USE_FFI then return ffi_buffer(str, "const unsigned char *") end
-
-		local buf = ffi_buffer(#str)
-
-		for i = 0, #str - 1 do
-			buf[i] = s_byte(str, i + 1)
-		end
-
-		return buf
+		return ffi_buffer(str, "const unsigned char *")
 	end
 end
 
