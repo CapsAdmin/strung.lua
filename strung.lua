@@ -1,25 +1,12 @@
-local USE_FFI = false
-local FFI_COMPARE = false
-local USE_FULL_FFI = false
-local REPORT_MISMATCH = false
-local _G = _G
-
-if USE_FULL_FFI then USE_FFI = false end
-
-local ffi = (USE_FFI or USE_FULL_FFI) and require("ffi") or nil
-local ffi_stringx
-
 local function ffi_copy(dst, src, len)
 	for i = 1, len do
 		dst[i - 1] = src[i - 1]
 	end
 
-	if USE_FFI then ffi.copy(dst.ffi_buffer, src.ffi_buffer, len) end
-
 	return dst
 end
 
-function ffi_stringx(buf, len)
+local function ffi_string(buf, len)
 	local str = {}
 	local i = 0
 
@@ -34,16 +21,6 @@ function ffi_stringx(buf, len)
 		i = i + 1
 	end
 
-	if USE_FFI then
-		local res = ffi.string(buf.ffi_buffer, len)
-
-		if table.concat(str) ~= res then
-			print("ffi.string mismatch:", table.concat(str), res)
-		end
-
-		return res
-	end
-
 	return table.concat(str)
 end
 
@@ -56,15 +33,7 @@ do
 		local str = {"i=" .. self.pointer, ":["}
 
 		for i = 1, #self.values do
-			local v = (self.values[i] or "#")
-
-			if USE_FFI then
-				if v ~= self.ffi_buffer[i - 1] then
-					v = v .. "~=" .. self.ffi_buffer[i - 1]
-				end
-			end
-
-			table.insert(str, v)
+			table.insert(str, self.values[i] or "#")
 		end
 
 		str[#str + 1] = "]"
@@ -92,15 +61,7 @@ do
 	end
 
 	local function get_index_offset(self, index)
-		index = self.pointer + index + 1
-
-		if index < 0 then print("index < 0" .. index) end
-
-		if index > self.length then
-			print("index > length " .. index .. " " .. self.length)
-		end
-
-		return index
+		return self.pointer + index + 1
 	end
 
 	function meta:__index(index)
@@ -108,21 +69,7 @@ do
 			error("string index: " .. index .. " " .. debug.traceback())
 		end
 
-		local val = self.values[get_index_offset(self, index)] or 0
-
-		if USE_FFI then
-			local res = self.ffi_buffer[index]
-
-			if REPORT_MISMATCH then
-				if res ~= val then
-					print("ffi_buffer[" .. index .. "]: " .. "" .. res .. " ~= " .. val)
-				end
-			end
-
-			return res
-		end
-
-		return val
+		return self.values[get_index_offset(self, index)] or 0
 	end
 
 	function meta:__newindex(index, val)
@@ -131,46 +78,12 @@ do
 
 		local index_offset = get_index_offset(self, index)
 		self.values[index_offset] = val
-
-		if USE_FFI then
-			self.ffi_buffer[index] = val
-
-			if REPORT_MISMATCH then
-				if self[index] ~= val then
-					print(
-						"ffi_buffer[" .. index .. "] = " .. val .. " mismatch:",
-						self.ffi_buffer[index_offset],
-						val
-					)
-				end
-			end
-		end
 	end
 
 	function meta:PointerOffset(offset)
 		local new = ffi_buffer()
-
-		if USE_FFI then
-			rawset(new, "type", self.type)
-			rawset(new, "ffi_buffer", self.ffi_buffer + offset)
-		end
-
 		new.pointer = self.pointer + offset
-		new.values = self.values
-
-		for i, v in ipairs(self.values) do
-
-		--new.values[i] = v
-		end
-
-		if USE_FFI then
-			if self.length ~= math.huge then
-				for i = 0, self.length - 1 do
-					local x = self[i]
-				end
-			end
-		end
-
+		new.values = self.values -- don't copy the values, otherwise we can't modify the original buffer
 		return new
 	end
 
@@ -188,8 +101,6 @@ do
 			for i, v in ipairs(len.values) do
 				self.values[i] = v
 			end
-
-			if USE_FFI then self.ffi_buffer = ffi.cast(t, len.ffi_buffer) end
 		elseif type(len) == "string" then
 			self.length = #len
 			self.pointer = 0
@@ -198,8 +109,6 @@ do
 			for i = 1, #len do
 				self.values[i] = string.byte(len, i)
 			end
-
-			if USE_FFI then self.ffi_buffer = ffi.cast(t, len) end
 		else
 			self.length = type(len) == "number" and len or math.huge
 			self.pointer = 0
@@ -210,8 +119,6 @@ do
 					self.values[i] = 0
 				end
 			end
-
-			if t then if USE_FFI then self.ffi_buffer = ffi.new(t, len, 0) end end
 		end
 
 		setmetatable(self, meta)
@@ -271,18 +178,9 @@ local s, t = require("string"), require("table")
 local s_byte, s_find, s_gmatch, s_gsub, s_len, s_rep, s_sub = s.byte, s.find, s.gmatch, s.gsub, s.len, s.rep, s.sub
 local t_concat, t_insert = t.concat, t.insert
 --local ffi = require("ffi")
-local C, cdef, copy, metatype, new, ffi_string, typeof
-
-if ffi then
-	C, cdef, copy, metatype, new, ffi_string, typeof = ffi.C, ffi.cdef, ffi.copy, ffi.metatype, ffi.new, ffi.string, ffi.typeof
-end
-
-if not USE_FULL_FFI then
-	copy = ffi_copy
-	new = ffi_buffer
-	ffi_string = ffi_stringx
-end
-
+local copy = ffi_copy
+local new = ffi_buffer
+local ffi_string = ffi_string
 local bit = require("bit")
 local band, bor, bxor = bit.band, bit.bor, bit.xor
 local lshift, rshift, rol = bit.lshift, bit.rshift, bit.rol
@@ -291,21 +189,14 @@ local lshift, rshift, rol = bit.lshift, bit.rshift, bit.rol
 local u32ary
 local u32ptr
 local constchar
-
-if USE_FULL_FFI then
-	u32ary = typeof("uint32_t[?]")
-	u32ptr = typeof("uint32_t *")
-	constchar = typeof("const unsigned char *")
-else
-	u32ary = function(len)
-		return (ffi_buffer(len, "uint32_t[?]"))
-	end
-	u32ptr = function(buf)
-		return (ffi_buffer(buf, "uint32_t *"))
-	end
-	constchar = function(str)
-		return (ffi_buffer(str, "const unsigned char *"))
-	end
+u32ary = function(len)
+	return ffi_buffer(len, "uint32_t[?]")
+end
+u32ptr = function(buf)
+	return ffi_buffer(buf, "uint32_t *")
+end
+constchar = function(str)
+	return ffi_buffer(str, "const unsigned char *")
 end
 
 -------------------------------------------------------------------------------
@@ -674,110 +565,71 @@ local function push(tpl, data, buf, backbuf, ind)
 	end
 end
 
-local ccref
-
 --- Character classes...
-if USE_FULL_FFI and false then
-	cdef[[
-	int isalpha (int c); int iscntrl (int c); int isdigit (int c);
-	int islower (int c); int ispunct (int c); int isspace (int c);
-	int isupper (int c); int isalnum (int c); int isxdigit (int c);]]
-	ccref = {
-		a = function(c)
-			return C.isalpha(c) ~= 0
-		end,
-		c = function(c)
-			return C.iscntrl(c) ~= 0
-		end,
-		d = function(c)
-			return C.isdigit(c) ~= 0
-		end,
-		l = function(c)
-			return C.islower(c) ~= 0
-		end,
-		p = function(c)
-			return C.ispunct(c) ~= 0
-		end,
-		s = function(c)
-			return C.isspace(c) ~= 0
-		end,
-		u = function(c)
-			return C.isupper(c) ~= 0
-		end,
-		w = function(c)
-			return C.isalnum(c) ~= 0
-		end,
-		x = function(c)
-			return C.isxdigit(c) ~= 0
-		end,
-	}
-else
-	local B = s_byte
+local B = s_byte
 
-	local function isdigit(c)
-		return (c >= B("0") and c <= B("9"))
-	end
-
-	local function isxdigit(c)
-		return (isdigit(c) or (c >= B("A") and c <= B("F")) or (c >= B("a") and c <= B("f")))
-	end
-
-	local function isupper(c)
-		return (c >= B("A") and c <= B("Z"))
-	end
-
-	local function isspace(c)
-		return (
-				c == B(" ") or
-				c == B("\f")
-				or
-				c == B("\n")
-				or
-				c == B("\r")
-				or
-				c == B("\t")
-				or
-				c == B("\v")
-			)
-	end
-
-	local function isprint(c)
-		return (c >= 0x20 and c <= 0x7E)
-	end
-
-	local function isalpha(c)
-		return ((c >= B("a") and c <= B("z")) or (c >= B("A") and c <= B("Z")))
-	end
-
-	local function isalnum(c)
-		return (isalpha(c) or isdigit(c))
-	end
-
-	local function ispunct(c)
-		return (isprint(c) and not isspace(c) and not isalnum(c))
-	end
-
-	local function islower(c)
-		return (c >= B("a") and c <= B("z"))
-	end
-
-	local function iscntrl(c)
-		return (c == 127 or (c >= 0 and c <= 31))
-	end
-
-	ccref = {
-		a = isalpha,
-		c = iscntrl,
-		d = isdigit,
-		l = islower,
-		p = ispunct,
-		s = isspace,
-		u = isupper,
-		w = isalnum,
-		x = isxdigit,
-	}
+local function isdigit(c)
+	return (c >= B("0") and c <= B("9"))
 end
 
+local function isxdigit(c)
+	return (isdigit(c) or (c >= B("A") and c <= B("F")) or (c >= B("a") and c <= B("f")))
+end
+
+local function isupper(c)
+	return (c >= B("A") and c <= B("Z"))
+end
+
+local function isspace(c)
+	return (
+			c == B(" ") or
+			c == B("\f")
+			or
+			c == B("\n")
+			or
+			c == B("\r")
+			or
+			c == B("\t")
+			or
+			c == B("\v")
+		)
+end
+
+local function isprint(c)
+	return (c >= 0x20 and c <= 0x7E)
+end
+
+local function isalpha(c)
+	return ((c >= B("a") and c <= B("z")) or (c >= B("A") and c <= B("Z")))
+end
+
+local function isalnum(c)
+	return (isalpha(c) or isdigit(c))
+end
+
+local function ispunct(c)
+	return (isprint(c) and not isspace(c) and not isalnum(c))
+end
+
+local function islower(c)
+	return (c >= B("a") and c <= B("z"))
+end
+
+local function iscntrl(c)
+	return (c == 127 or (c >= 0 and c <= 31))
+end
+
+local ccref = {
+	a = isalpha,
+	c = iscntrl,
+	d = isdigit,
+	l = islower,
+	p = ispunct,
+	s = isspace,
+	u = isupper,
+	w = isalnum,
+	x = isxdigit,
+}
 local charclass = setmetatable(
 	{},
 	{
@@ -1247,52 +1099,13 @@ do
 	local free
 	local malloc
 	local charsize
-
-	if USE_FULL_FFI then
-		cdef("void* malloc (size_t size);")
-		cdef("void free (void* ptr);")
-		free = ffi.C.free
-		charsize = ffi.sizeof("char")
-		malloc = function(s)
-			local p = C.malloc(s)
-
-			if p == nil then
-				collectgarbage()
-				p = C.malloc(s)
-			end
-
-			if p == nil then error("out of memory, `ffi.C.malloc()` failed") end
-
-			return p
-		end
-		Buffer = metatype(
-			--               size,       index,            array
-			"struct{uint32_t s; uint32_t i; unsigned char* a;}",
-			{
-				__gc = function(self)
-					C.free(self.a)
-				end,
-			}
-		)
-
-		if true then
-			free = function() end
-			malloc = function(s)
-				return ffi.new("unsigned char[?]", s)
-			end
-			Buffer = function(size, index, arr)
-				return {s = size, i = index, a = arr}
-			end
-		end
-	else
-		charsize = 1
-		malloc = function(s)
-			return ffi_buffer(s, "unsigned char[?]")
-		end
-		free = function() end
-		Buffer = function(size, index, arr)
-			return {s = size, i = index, a = arr}
-		end
+	charsize = 1
+	malloc = function(s)
+		return ffi_buffer(s, "unsigned char[?]")
+	end
+	free = function() end
+	Buffer = function(size, index, arr)
+		return {s = size, i = index, a = arr}
 	end
 
 	local function buffer()
